@@ -1,39 +1,42 @@
 const Moment = require('moment');
 const { Wechaty } = require('wechaty');
 const store = require('../store/index.js');
-
-let bot = Wechaty.instance();
+const log = require('loglevel');
+require('dotenv').config();
 
 const helpMessage = `       ---------- 提醒小助手 ----------
 命令：
 @所有            
 @删除 $名称
-@帮助       
+@帮助
 @添加  #名称 $文字
-              #时刻 $时间
-              #日期 [ 今日 | $日期]
-              #提醒 $文字
+              #时刻 $时间 
+                          默认：${new Date().toLocaleTimeString('en-GB')}
+              #日期 $日期 
+                          默认：${new Date().toLocaleDateString('zh-Hans-CN')}
+              #提醒 $文字 
+                          默认：$名称
              [#周期 $时间]
 `;
 
-const myName = '钟镇炽';
+let myMaster = process.env.MASTER_ALIAS;
+let myMasterContact = null;
 let timeoutHandles = {};
 let intervalHandles = {};
-let me = null;
+let bot = Wechaty.instance();
 
 async function onMessage(message) {
     const from = message.from();
-    
-    if (from.name() !== myName) {
+
+    if (await from.alias() !== myMaster) {
         return;
     }
-    
+
     if (!message.text()) {
         return;
     }
 
-    console.log(message);
-    
+    log.info(`Get Message: ${message.text()}`);
     switch (message.text().substring(0, 3)) {
         case '@帮助':
             await message.say(helpMessage);
@@ -43,8 +46,11 @@ async function onMessage(message) {
             const err = onHandleAdd(message.text().substring(3));
             if (err) {
                 await message.say(`${err}\n\n${helpMessage}`);
+                log.info(`Add err: ${err}`);
+
             } else {
                 await message.say('添加成功！');
+                log.info(`Add successfully`);
             }
             break;
 
@@ -61,8 +67,10 @@ async function onMessage(message) {
             const name = message.text().substring(3).trim();
             if (name.length === 0) {
                 await message.say('请指定名称');
+                log.info('Remove failed due to invalid name');
             } else if (!store.get(name)) {
                 await message.say(`${name}不存在`);
+                log.info('Remove failed due to emply name');
             } else {
                 store.remove(name);
                 if (timeoutHandles[name]) {
@@ -74,19 +82,29 @@ async function onMessage(message) {
                     delete intervalHandles[name];
                 }
                 await message.say('删除成功！');
+                log.info('Remove successfully');
             }
             break;
 
         default:
+            log.warn(`Can not handle ${message.text()}`);
             break;
     }
 }
 
-async function sendToMe({ name, msg }) {
-    if (!me) {
-        me = await bot.Contact.find({name: myName});
+function init() {
+    log.info('Setting up ...')
+    for (const value of store.values()) {
+        setupTimer(value);
     }
-    await me.say(`${name}说：\n${msg}`);
+}
+
+async function sendToMaster({ name, msg }) {
+    if (!myMasterContact) {
+        myMasterContact = await bot.Contact.find({ alias: myMaster });
+    }
+    log.info(`Notice [${name}] is sending ${msg}`);
+    await myMasterContact.say(`${name}说：\n${msg}`);
 }
 
 function setupTimer({ createTime, args }) {
@@ -98,29 +116,33 @@ function setupTimer({ createTime, args }) {
             clearTimeout(timeoutHandles[args.name]);
             delete timeoutHandles[args.name];
         }
+        log.info(`Notice [${args.name}] is out of time`);
         return;
     }
 
+    log.info(`Notice [${args.name}] is setting up`);
     store.save({ createTime, args })
 
     if (!args.interval) {
         timeoutHandles[args.name] = setTimeout(async () => {
-            await sendToMe({ name: args.name, msg: args.text });
+            await sendToMaster({ name: args.name, msg: args.text });
             store.remove(args.name);
             if (timeoutHandles[args.name]) {
                 clearTimeout(timeoutHandles[args.name]);
                 delete timeoutHandles[args.name];
             }
         }, future - now);
+        log.info(`Notice [${args.name}] will active in ${(future - now) / 1000}s`);
+    } else {
+        const begin = future > now ? future : (Math.floor((now - future) / args.interval + 1) * args.interval + future);
+        timeoutHandles[args.name] = setTimeout(async () => {
+            await sendToMaster({ name: args.name, msg: args.text });
+            intervalHandles[args.name] = setInterval(async () => {
+                await sendToMaster({ name: args.name, msg: args.text });
+            }, args.interval);
+        }, begin - now);
+        log.info(`Notice [${args.name}] will active in ${(begin - now) / 1000}s and ring every ${args.interval / 1000}s`);
     }
-
-    const begin = future > now ? future - now : Math.floor((now - future) / args.interval + 1) * args.interval + future;
-    timeoutHandles[args.name] = setTimeout(async () => {
-        await sendToMe({ name: args.name, msg: args.text });
-        intervalHandles[args.name] = setInterval(async () => {
-            await sendToMe({ name: args.name, msg: args.text });
-        }, args.interval);
-    }, begin);
 }
 
 function onHandleAdd(rawString) {
@@ -203,13 +225,13 @@ function parseAddArg(rawString) {
         return [null, "请指定名称"];
     }
     if (!argObject['time']) {
-        return [null, "请指定时刻"];
+        [argObject['time'], _] = parseTime(new Date().toLocaleTimeString('en-GB'));
     }
     if (!argObject['date']) {
-        return [null, "请指定日期"];
+        [argObject['date'], _] = parseDate(new Date().toLocaleDateString('zh-Hans-CN'));
     }
     if (!argObject['text']) {
-        return [null, "请指定提醒"];
+        argObject['text'] = argObject['name'];
     }
 
     return [argObject, null];
@@ -237,26 +259,15 @@ function parseTime(time) {
 }
 
 function parseDate(date) {
-    const approach = date.substring(0, 2);
-
-    let res = {}
-    switch (approach) {
-        case '今日':
-            const now = Moment();
-            res['year'] = now.year();
-            res['month'] = now.month();
-            res['date'] = now.date();
-            res['timestamp'] = new Date(now.toDate().toLocaleDateString()).getTime();
-            break;
-        default:
-            const moment = Moment(date, "YYYY/MM/DD")
-            if (!moment.isValid()) {
-                return [null, '日期表示不合法，请遵循YYYY/MM/DD格式'];
-            }
-            res['year'] = moment.year();
-            res['month'] = moment.month();
-            res['date'] = moment.date();
-            res['timestamp'] = new Date(moment.toDate().toLocaleDateString()).getTime();
+    const moment = Moment(date, "YYYY/MM/DD");
+    if (!moment.isValid()) {
+        return [null, '日期表示不合法，请遵循YYYY/MM/DD格式'];
+    }
+    let res = {
+        'year': moment.year(),
+        'month': moment.month(),
+        'date': moment.date(),
+        'timestamp': new Date(moment.toDate().toLocaleDateString()).getTime()
     }
 
     return [res, null];
@@ -280,5 +291,4 @@ function parseInterval(interval) {
     return [res, null];
 }
 
-
-module.exports = onMessage;
+module.exports = { onMessage, init };

@@ -1,19 +1,27 @@
+const low = require('lowdb');
+const FileSync = require('lowdb/adapters/FileSync');
+var fs = require('fs');
+
+const dbDir = require('os').homedir() + '/.wechat-bot/';
+if (!fs.existsSync(dbDir)){
+    fs.mkdirSync(dbDir);
+}
+
+const adapter = new FileSync(dbDir + 'db.json');
+const db = low(adapter);
+
 let store = {
-    notifications: {},
     save: function ({ createTime, args }) {
-        this.notifications[args.name] = {
-            createTime,
-            args,
-        }
+        db.set(args.name, { createTime, args }).write();
     },
     get: function (name) {
-        return this.notifications[name];
+        return db.get(name).value();
     },
     remove: function (name) {
-        delete this.notifications[name];
+        db.unset(name).write();
     },
     values: function() {
-        return Object.values(this.notifications);
+        return db.values();
     }
 }
 

@@ -278,16 +278,18 @@ function parseText(text) {
 }
 
 function parseInterval(interval) {
+    const pd = /(\d*\.?\d+)d/.exec(interval);
     const ph = /(\d*\.?\d+)h/.exec(interval);
     const pm = /(\d*\.?\d+)m/.exec(interval);
     const ps = /(\d*\.?\d+)s/.exec(interval);
+    const d = pd && pd[1] || '0';
     const h = ph && ph[1] || '0';
     const m = pm && pm[1] || '0';
     const s = ps && ps[1] || '0';
-    if (h.length === 0 || m.length === 0 || s.length === 0) {
-        return [null, '周期表示不合法，请遵循hms格式'];
+    if (d.length === 0 || h.length === 0 || m.length === 0 || s.length === 0) {
+        return [null, '周期表示不合法，请遵循dhms格式'];
     }
-    const res = ((parseFloat(h) * 60 + parseFloat(m)) * 60 + parseFloat(s)) * 1000;
+    const res = (((parseFloat(d) * 24 + parseFloat(h)) * 60 + parseFloat(m)) * 60 + parseFloat(s)) * 1000;
     return [res, null];
 }
 
